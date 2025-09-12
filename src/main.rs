@@ -136,7 +136,7 @@ fn main() -> Result<(), BoxedError> {
         }
     });
 
-    iced::application(APP_NAME, update, view)
+    iced::application(AppState::default, update, view)
         .window(window::Settings {
             exit_on_close_request: false,
             ..window::Settings::default()
@@ -144,7 +144,7 @@ fn main() -> Result<(), BoxedError> {
         .subscription(move |_state| {
             iced::Subscription::batch(vec![
                 window::events().map(|(_id, event)| Message::WindowEvent(event)),
-                iced_futures::backend::default::time::every(std::time::Duration::from_millis(100)).map(move |_| {
+                iced::time::every(std::time::Duration::from_millis(100)).map(move |_| {
                     match TRAY_ICON_EVENT_RECEIVER.lock().unwrap().as_ref().unwrap().try_recv() {
                         Ok(event_id) => Message::TrayIconEvent(event_id),
                         Err(_) => Message::Noop,

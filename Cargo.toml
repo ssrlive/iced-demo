@@ -5,13 +5,13 @@ edition = "2024"
 
 [dependencies]
 env_logger = "0.11.8"
-iced = { version = "0.13.1", features = ["debug", "image", "advanced", "tokio"] }
-iced_futures = "0.13.2"
-# iced = {version = "0.14.0-dev", features = ["debug", "image", "advanced", "tokio"], git = "https://github.com/iced-rs/iced.git", rev = "ebe223c"}
+iced = { version = "0.14.0-dev", features = ["debug", "image", "advanced", "tokio"], git = "https://github.com/iced-rs/iced.git", rev = "f9de884" }
+iced_futures = { version = "0.14.0-dev", features = [], git = "https://github.com/iced-rs/iced.git", rev = "f9de884" }
+# iced = { version = "0.13.1", features = ["debug", "image", "advanced", "tokio"] }
+# iced_futures = "0.13.2"
 image = { version = "0.25", features = ["png", "ico"] }
 log = "0.4.28"
 tray-icon = { version = "0.21.1", default-features = false, features = ["libxdo"] }
 # tokio = {version = "*", features = ["full"]}
 # tracing-subscriber = "0.3"
-# iced = {version = "0.14.0-dev", features = ["debug"], git = "https://github.com/iced-rs/iced.git", rev = "ebe223c"}
 # gtk = {version = "*"}
