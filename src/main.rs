@@ -24,6 +24,7 @@ struct AppState {
 #[derive(Debug, Clone)]
 enum Message {
     WindowEvent(window::Event),
+
     TrayIconEvent(tray_icon::menu::MenuId),
     ConfirmExit,
     CancelExit,
@@ -36,6 +37,11 @@ fn update(state: &mut AppState, message: Message) {
         Message::WindowEvent(window::Event::CloseRequested) => {
             state.show_confirm = true;
         }
+        Message::WindowEvent(event) => {
+            // log the window event for debugging and forward it to the table handler
+            log::info!("WindowEvent: {event:?}");
+            state.main_table.on_window_event_debug(&format!("{event:?}"));
+        }
         Message::ConfirmExit => {
             std::process::exit(0);
         }
@@ -47,7 +53,6 @@ fn update(state: &mut AppState, message: Message) {
             state.show_confirm = false;
         }
         Message::Noop => {}
-        _ => {}
     }
 }
 
@@ -95,7 +100,7 @@ fn handle_tray_icon_event(event_id: &tray_icon::menu::MenuId) {
 }
 
 fn main() -> Result<(), BoxedError> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug")).init();
 
     let (tx, rx) = std::sync::mpsc::channel();
 

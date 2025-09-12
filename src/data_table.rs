@@ -1,3 +1,4 @@
+use iced::Length;
 use iced::font;
 use iced::time::{Duration, hours, minutes};
 use iced::widget::{button, center_x, center_y, column, container, row, scrollable, slider, text, tooltip};
@@ -9,6 +10,7 @@ pub enum TableMessage {
     SeparatorChanged(f32, f32),
     ShowDetails(usize),
     HideDetails,
+    HideContext,
 }
 
 #[derive(Debug, Clone)]
@@ -17,6 +19,8 @@ pub struct Table {
     padding: (f32, f32),
     separator: (f32, f32),
     selected: Option<usize>,
+    last_cursor: Option<(f32, f32)>,
+    context_menu: Option<(usize, f32, f32)>,
 }
 
 impl Table {
@@ -31,6 +35,60 @@ impl Table {
             TableMessage::SeparatorChanged(x, y) => self.separator = (x, y),
             TableMessage::ShowDetails(idx) => self.selected = Some(idx),
             TableMessage::HideDetails => self.selected = None,
+            TableMessage::HideContext => self.context_menu = None,
+        }
+    }
+
+    // Handle window events forwarded from main as a debug string. This is a heuristic
+    // approach: we parse debug output to extract cursor positions and right-click presses.
+    pub fn on_window_event_debug(&mut self, debug: &str) {
+        // update cursor position from debug strings that include moved/cursor coordinates
+        // different Iced/backends may produce slightly different Debug representations
+        // so we look for either "CursorMoved" or "Moved" and parse x/y floats if present.
+        if debug.contains("CursorMoved") || debug.contains("Moved(") || debug.contains("MovedPoint") {
+            // try to parse any "x: <float>" and "y: <float>" occurrences
+            let mut x_opt: Option<f32> = None;
+            let mut y_opt: Option<f32> = None;
+
+            if let Some(x_idx) = debug.find("x:") {
+                let tail = &debug[x_idx + 2..].trim_start();
+                let num_str: String = tail.chars().take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-').collect();
+                if let Ok(xv) = num_str.trim().parse::<f32>() {
+                    x_opt = Some(xv);
+                }
+            }
+
+            if let Some(y_idx) = debug.find("y:") {
+                let tail = &debug[y_idx + 2..].trim_start();
+                let num_str: String = tail.chars().take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-').collect();
+                if let Ok(yv) = num_str.trim().parse::<f32>() {
+                    y_opt = Some(yv);
+                }
+            }
+
+            if let (Some(xv), Some(yv)) = (x_opt, y_opt) {
+                self.last_cursor = Some((xv, yv));
+                log::debug!("Cursor updated to: {:?}", self.last_cursor);
+            }
+        }
+
+        // detect right-click press in debug string
+        // detect right-click press in debug string. Try several keywords that vary by backend
+        if (debug.contains("MouseInput") || debug.contains("MouseButton") || debug.contains("ButtonPressed") || debug.contains("Pressed"))
+            && debug.contains("Right")
+        {
+            // use last_cursor to compute row index
+            if let Some((x, y)) = self.last_cursor {
+                let header_h = 36.0;
+                let row_h = 36.0;
+                if y > header_h {
+                    let idx = ((y - header_h) / row_h).floor() as usize;
+                    if idx < self.events.len() {
+                        log::debug!("Context menu set for idx {} at ({},{})", idx, x, y);
+                        self.context_menu = Some((idx, x, y));
+                    }
+                }
+            }
         }
     }
 
@@ -121,21 +179,53 @@ impl Table {
         ]
         .spacing(10);
 
-        // If a row is selected, show its details below
-        if let Some(idx) = self.selected {
-            if let Some(ev) = self.events.get(idx) {
-                let details = container(column![
-                    text(format!("Name: {}", ev.name)),
-                    text(format!("Duration: {} min", ev.duration.as_secs() / 60)),
-                    text(format!("Price: ${:.2}", ev.price)),
-                    text(format!("Rating: {:.2}", ev.rating)),
-                    row![button(text("Close")).on_press(TableMessage::HideDetails)]
-                ])
-                .padding(10)
+        // Render context menu if requested
+        // Render context menu if requested. We try to position it near last_cursor when possible.
+        if let Some((idx, x, _y)) = self.context_menu {
+            let menu = container(column![
+                button(text("Show details")).on_press(TableMessage::ShowDetails(idx)),
+                button(text("Close menu")).on_press(TableMessage::HideContext)
+            ])
+            .padding(8)
+            .style(container::dark)
+            .width(200);
+
+            // approximate horizontal position: if x is known and large use left padding to shift menu
+            let positioned = if x > 0.0 {
+                // convert x into a left padding amount (clamped)
+                let pad = (x - 100.0).clamp(0.0, 600.0) as u16;
+                container(menu).padding(pad)
+            } else {
+                container(menu)
+            };
+
+            main_col = main_col.push(positioned.padding(10));
+        }
+
+        // Render modal dialog when a row is selected
+        // If modal is active, render it as a full-screen overlay so it behaves like a blocking modal.
+        if let Some(idx) = self.selected
+            && let Some(ev) = self.events.get(idx)
+        {
+            let modal_body = container(column![
+                text(format!("Name: {}", ev.name)).size(18),
+                text(format!("Duration: {} min", ev.duration.as_secs() / 60)),
+                text(format!("Price: ${:.2}", ev.price)),
+                text(format!("Rating: {:.2}", ev.rating)),
+                row![button(text("Close")).on_press(TableMessage::HideDetails)]
+            ])
+            .padding(16)
+            .width(400)
+            .style(container::dark);
+
+            // full-screen semi-transparent backdrop + centered modal body
+            let backdrop = container(column![center_y(center_x(modal_body))])
+                .width(Length::Fill)
+                .height(Length::Fill)
                 .style(container::dark);
 
-                main_col = main_col.push(center_x(details).padding(10));
-            }
+            // Return only the overlay to ensure it visually blocks the rest of the UI.
+            return backdrop.into();
         }
 
         main_col.into()
@@ -149,6 +239,8 @@ impl Default for Table {
             padding: (10.0, 5.0),
             separator: (1.0, 1.0),
             selected: None,
+            last_cursor: None,
+            context_menu: None,
         }
     }
 }
