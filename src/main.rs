@@ -1,5 +1,5 @@
 use iced::{
-    Length,
+    Length, Theme,
     widget::{button, column, container, row, text},
     window,
 };
@@ -9,6 +9,7 @@ use std::{
 };
 
 mod common_assets;
+mod data_table;
 
 pub(crate) type BoxedError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
@@ -17,15 +18,16 @@ pub(crate) const APP_NAME: &str = "MyApp";
 #[derive(Debug, Default, Clone)]
 struct AppState {
     show_confirm: bool,
+    main_table: data_table::Table,
 }
 
 #[derive(Debug, Clone)]
 enum Message {
     WindowEvent(window::Event),
     TrayIconEvent(tray_icon::menu::MenuId),
-    RequestExit,
     ConfirmExit,
     CancelExit,
+    TbMsg(data_table::TableMessage),
     Noop,
 }
 
@@ -34,15 +36,13 @@ fn update(state: &mut AppState, message: Message) {
         Message::WindowEvent(window::Event::CloseRequested) => {
             state.show_confirm = true;
         }
-        Message::RequestExit => {
-            state.show_confirm = true;
-        }
         Message::ConfirmExit => {
             std::process::exit(0);
         }
         Message::TrayIconEvent(ref menu_id) => {
             handle_tray_icon_event(menu_id);
         }
+        Message::TbMsg(msg) => state.main_table.update(msg),
         Message::CancelExit => {
             state.show_confirm = false;
         }
@@ -52,7 +52,7 @@ fn update(state: &mut AppState, message: Message) {
 }
 
 fn view(state: &'_ AppState) -> iced::Element<'_, Message> {
-    let content = if state.show_confirm {
+    let content: iced::Element<'_, Message> = if state.show_confirm {
         container(column![
             text("Are you sure you want to exit?"),
             row![
@@ -62,15 +62,12 @@ fn view(state: &'_ AppState) -> iced::Element<'_, Message> {
         ])
         .center_x(Length::Fill)
         .center_y(Length::Fill)
+        .into()
     } else {
-        container(column![
-            text("Hello from Iced!"),
-            button(text("Quit")).on_press(Message::RequestExit)
-        ])
-        .center_x(Length::Fill)
-        .center_y(Length::Fill)
+        // Use the data table view here and map its messages into our app Message::TbMsg
+        state.main_table.view().map(Message::TbMsg)
     };
-    content.into()
+    content
 }
 
 const STR_SHOW: &str = "Show";
@@ -152,6 +149,7 @@ fn main() -> Result<(), BoxedError> {
                 }),
             ])
         })
+        .theme(Theme::Dark)
         .run()?;
     Ok(())
 }
