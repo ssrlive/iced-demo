@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-iced = { version = "0.13.1", features = [] }
+iced = { version = "0.13.1", features = ["debug", "image", "advanced", "tokio"] }
+iced_futures = "0.13.2"
 # iced = {version = "0.14.0-dev", features = ["debug", "image", "advanced", "tokio"], git = "https://github.com/iced-rs/iced.git", rev = "ebe223c"}
 image = { version = "0.25", features = ["png", "ico"] }
 tray-icon = { version = "0.21.1", default-features = false, features = ["libxdo"] }

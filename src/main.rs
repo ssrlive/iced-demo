@@ -3,12 +3,19 @@ use iced::{
     widget::{button, column, container, row, text},
     window,
 };
+use std::{
+    collections::HashMap,
+    sync::{Arc, LazyLock, Mutex, mpsc::Receiver},
+};
 
 mod common_assets;
 
 pub(crate) type BoxedError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 pub(crate) const APP_NAME: &str = "MyApp";
+
+// Global static receiver
+static TRAY_ICON_EVENT_RECEIVER: LazyLock<Mutex<Option<Receiver<tray_icon::menu::MenuId>>>> = LazyLock::new(|| Mutex::new(None));
 
 #[derive(Debug, Default, Clone)]
 struct AppState {
@@ -21,6 +28,7 @@ enum Message {
     RequestExit,
     ConfirmExit,
     CancelExit,
+    Noop,
 }
 
 fn update(state: &mut AppState, message: Message) {
@@ -37,6 +45,7 @@ fn update(state: &mut AppState, message: Message) {
         Message::CancelExit => {
             state.show_confirm = false;
         }
+        Message::Noop => {}
         _ => {}
     }
 }
@@ -63,13 +72,43 @@ fn view(state: &'_ AppState) -> iced::Element<'_, Message> {
     content.into()
 }
 
+const STR_SHOW: &str = "Show";
+const STR_QUIT: &str = "Quit";
+
+static TRAY_ICON_MENU_ITEM_IDS: LazyLock<Arc<Mutex<HashMap<&str, tray_icon::menu::MenuId>>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
+
+fn check_tray_icon_event(event_id: tray_icon::menu::MenuId) -> Message {
+    println!("Event ID: {event_id:?}");
+    let quit_id = TRAY_ICON_MENU_ITEM_IDS.lock().unwrap().get(&STR_QUIT).cloned();
+    let show_id = TRAY_ICON_MENU_ITEM_IDS.lock().unwrap().get(&STR_SHOW).cloned();
+    if let Some(show_id) = show_id
+        && event_id == show_id
+    {
+        println!("Show clicked");
+        return Message::WindowEvent(window::Event::Resized(iced::Size::new(800.0, 600.0)));
+    }
+    if let Some(quit_id) = quit_id
+        && event_id == quit_id
+    {
+        println!("Quit clicked");
+        return Message::ConfirmExit;
+    }
+    Message::Noop
+}
+
 fn main() -> Result<(), BoxedError> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    *TRAY_ICON_EVENT_RECEIVER.lock().unwrap() = Some(rx);
     // Create the tray menu
     let menu = tray_icon::menu::Menu::new();
-    let show_item = tray_icon::menu::MenuItem::new("Show", true, None);
-    let quit_item = tray_icon::menu::MenuItem::new("Quit", true, None);
+    let show_item = tray_icon::menu::MenuItem::new(STR_SHOW, true, None);
+    let quit_item = tray_icon::menu::MenuItem::new(STR_QUIT, true, None);
     menu.append(&show_item)?;
     menu.append(&quit_item)?;
+
+    TRAY_ICON_MENU_ITEM_IDS.lock().unwrap().insert(STR_SHOW, show_item.id().clone());
+    TRAY_ICON_MENU_ITEM_IDS.lock().unwrap().insert(STR_QUIT, quit_item.id().clone());
 
     // Create the tray icon
     let img = image::load_from_memory(common_assets::MAIN_ICON)?;
@@ -83,15 +122,15 @@ fn main() -> Result<(), BoxedError> {
         ..Default::default()
     };
     let _tray_icon = tray_icon::TrayIcon::new(attrs)?;
-    let show_id = show_item.id().clone();
-    let quit_id = quit_item.id().clone();
     std::thread::spawn(move || {
         for event in tray_icon::menu::MenuEvent::receiver() {
-            if event.id() == &show_id {
-                println!("Show clicked");
-            } else if event.id() == &quit_id {
-                println!("Quit clicked");
-                std::process::exit(0);
+            let quit_id = TRAY_ICON_MENU_ITEM_IDS.lock().unwrap().get(&STR_QUIT).cloned();
+            let event_id = event.id().clone();
+            let _ = tx.send(event_id.clone());
+            if let Some(quit_id) = quit_id
+                && event_id == quit_id
+            {
+                break;
             }
         }
     });
@@ -101,7 +140,21 @@ fn main() -> Result<(), BoxedError> {
             exit_on_close_request: false,
             ..window::Settings::default()
         })
-        .subscription(|_state| window::events().map(|(_id, event)| Message::WindowEvent(event)))
+        .subscription(move |_state| {
+            iced::Subscription::batch(vec![
+                window::events().map(|(_id, event)| Message::WindowEvent(event)),
+                iced_futures::backend::default::time::every(std::time::Duration::from_millis(100)).map(move |_| {
+                    if let Some(rx) = TRAY_ICON_EVENT_RECEIVER.lock().unwrap().as_mut() {
+                        match rx.try_recv() {
+                            Ok(event_id) => check_tray_icon_event(event_id),
+                            Err(_) => Message::Noop,
+                        }
+                    } else {
+                        Message::Noop
+                    }
+                }),
+            ])
+        })
         .run()?;
     Ok(())
 }
