@@ -14,9 +14,6 @@ pub(crate) type BoxedError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 pub(crate) const APP_NAME: &str = "MyApp";
 
-// Global static receiver
-static TRAY_ICON_EVENT_RECEIVER: LazyLock<Mutex<Option<Receiver<tray_icon::menu::MenuId>>>> = LazyLock::new(|| Mutex::new(None));
-
 #[derive(Debug, Default, Clone)]
 struct AppState {
     show_confirm: bool,
@@ -25,6 +22,7 @@ struct AppState {
 #[derive(Debug, Clone)]
 enum Message {
     WindowEvent(window::Event),
+    TrayIconEvent(tray_icon::menu::MenuId),
     RequestExit,
     ConfirmExit,
     CancelExit,
@@ -41,6 +39,9 @@ fn update(state: &mut AppState, message: Message) {
         }
         Message::ConfirmExit => {
             std::process::exit(0);
+        }
+        Message::TrayIconEvent(ref menu_id) => {
+            handle_tray_icon_event(menu_id);
         }
         Message::CancelExit => {
             state.show_confirm = false;
@@ -78,28 +79,33 @@ const STR_QUIT: &str = "Quit";
 static TRAY_ICON_MENU_ITEM_IDS: LazyLock<Arc<Mutex<HashMap<&str, tray_icon::menu::MenuId>>>> =
     LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
 
-fn check_tray_icon_event(event_id: tray_icon::menu::MenuId) -> Message {
-    println!("Event ID: {event_id:?}");
+fn handle_tray_icon_event(event_id: &tray_icon::menu::MenuId) {
+    log::info!("Event ID: {event_id:?}");
     let quit_id = TRAY_ICON_MENU_ITEM_IDS.lock().unwrap().get(&STR_QUIT).cloned();
     let show_id = TRAY_ICON_MENU_ITEM_IDS.lock().unwrap().get(&STR_SHOW).cloned();
     if let Some(show_id) = show_id
-        && event_id == show_id
+        && event_id == &show_id
     {
-        println!("Show clicked");
-        return Message::WindowEvent(window::Event::Resized(iced::Size::new(800.0, 600.0)));
+        log::info!("Show clicked");
+        // Here you would typically send a message to your application to show or hide the window
     }
     if let Some(quit_id) = quit_id
-        && event_id == quit_id
+        && event_id == &quit_id
     {
-        println!("Quit clicked");
-        return Message::ConfirmExit;
+        log::info!("Quit clicked");
+        std::process::exit(0);
     }
-    Message::Noop
 }
 
 fn main() -> Result<(), BoxedError> {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
     let (tx, rx) = std::sync::mpsc::channel();
+
+    // Global static receiver
+    static TRAY_ICON_EVENT_RECEIVER: LazyLock<Mutex<Option<Receiver<tray_icon::menu::MenuId>>>> = LazyLock::new(|| Mutex::new(None));
     *TRAY_ICON_EVENT_RECEIVER.lock().unwrap() = Some(rx);
+
     // Create the tray menu
     let menu = tray_icon::menu::Menu::new();
     let show_item = tray_icon::menu::MenuItem::new(STR_SHOW, true, None);
@@ -124,13 +130,8 @@ fn main() -> Result<(), BoxedError> {
     let _tray_icon = tray_icon::TrayIcon::new(attrs)?;
     std::thread::spawn(move || {
         for event in tray_icon::menu::MenuEvent::receiver() {
-            let quit_id = TRAY_ICON_MENU_ITEM_IDS.lock().unwrap().get(&STR_QUIT).cloned();
-            let event_id = event.id().clone();
-            let _ = tx.send(event_id.clone());
-            if let Some(quit_id) = quit_id
-                && event_id == quit_id
-            {
-                break;
+            if let Err(e) = tx.send(event.id().clone()) {
+                log::error!("Failed to send tray icon event: {e}");
             }
         }
     });
@@ -144,13 +145,9 @@ fn main() -> Result<(), BoxedError> {
             iced::Subscription::batch(vec![
                 window::events().map(|(_id, event)| Message::WindowEvent(event)),
                 iced_futures::backend::default::time::every(std::time::Duration::from_millis(100)).map(move |_| {
-                    if let Some(rx) = TRAY_ICON_EVENT_RECEIVER.lock().unwrap().as_mut() {
-                        match rx.try_recv() {
-                            Ok(event_id) => check_tray_icon_event(event_id),
-                            Err(_) => Message::Noop,
-                        }
-                    } else {
-                        Message::Noop
+                    match TRAY_ICON_EVENT_RECEIVER.lock().unwrap().as_ref().unwrap().try_recv() {
+                        Ok(event_id) => Message::TrayIconEvent(event_id),
+                        Err(_) => Message::Noop,
                     }
                 }),
             ])
