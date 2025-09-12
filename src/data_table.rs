@@ -1,12 +1,14 @@
 use iced::font;
 use iced::time::{Duration, hours, minutes};
-use iced::widget::{center_x, center_y, column, container, row, scrollable, slider, table as table_widget, text, tooltip};
-use iced::{Center, Element, Fill, Font, Right};
+use iced::widget::{button, center_x, center_y, column, container, row, scrollable, slider, text, tooltip};
+use iced::{Center, Element, Fill, Font};
 
 #[derive(Debug, Clone)]
 pub enum TableMessage {
     PaddingChanged(f32, f32),
     SeparatorChanged(f32, f32),
+    ShowDetails(usize),
+    HideDetails,
 }
 
 #[derive(Debug, Clone)]
@@ -14,6 +16,7 @@ pub struct Table {
     events: Vec<Event>,
     padding: (f32, f32),
     separator: (f32, f32),
+    selected: Option<usize>,
 }
 
 impl Table {
@@ -26,55 +29,63 @@ impl Table {
         match message {
             TableMessage::PaddingChanged(x, y) => self.padding = (x, y),
             TableMessage::SeparatorChanged(x, y) => self.separator = (x, y),
+            TableMessage::ShowDetails(idx) => self.selected = Some(idx),
+            TableMessage::HideDetails => self.selected = None,
         }
     }
 
     pub fn view(&self) -> Element<'_, TableMessage> {
-        let table = {
-            let bold = |header| {
-                text(header).font(Font {
-                    weight: font::Weight::Bold,
-                    ..Font::DEFAULT
-                })
-            };
-
-            let columns = [
-                table_widget::column(bold("Name"), |event: &Event| text(&event.name)),
-                table_widget::column(bold("Time"), |event: &Event| {
-                    let minutes = event.duration.as_secs() / 60;
-
-                    text!("{minutes} min").style(if minutes > 90 { text::warning } else { text::default })
-                })
-                .align_x(Right)
-                .align_y(Center),
-                table_widget::column(bold("Price"), |event: &Event| {
-                    if event.price > 0.0 {
-                        text!("${:.2}", event.price).style(if event.price > 100.0 { text::warning } else { text::default })
-                    } else {
-                        text("Free").style(text::success).width(Fill).center()
-                    }
-                })
-                .align_x(Right)
-                .align_y(Center),
-                table_widget::column(bold("Rating"), |event: &Event| {
-                    text!("{:.2}", event.rating).style(if event.rating > 4.7 {
-                        text::success
-                    } else if event.rating < 2.0 {
-                        text::danger
-                    } else {
-                        text::default
-                    })
-                })
-                .align_x(Right)
-                .align_y(Center),
-            ];
-
-            table_widget(columns, &self.events)
-                .padding_x(self.padding.0)
-                .padding_y(self.padding.1)
-                .separator_x(self.separator.0)
-                .separator_y(self.separator.1)
+        // Build a manual table: header + rows so we can add per-row buttons (for context/details)
+        let bold = |header| {
+            text(header).font(Font {
+                weight: font::Weight::Bold,
+                ..Font::DEFAULT
+            })
         };
+
+        let mut rows = column![
+            row![
+                bold("Name").width(300),
+                bold("Time").width(80),
+                bold("Price").width(80),
+                bold("Rating").width(80),
+                // actions
+                bold("")
+            ]
+            .spacing(10)
+            .padding(5)
+        ];
+
+        for (i, event) in self.events.iter().enumerate() {
+            let minutes = event.duration.as_secs() / 60;
+            let time_text = text(format!("{minutes} min")).style(if minutes > 90 { text::warning } else { text::default });
+            let price_text = if event.price > 0.0 {
+                text(format!("${:.2}", event.price)).style(if event.price > 100.0 { text::warning } else { text::default })
+            } else {
+                text("Free").style(text::success).width(Fill).center()
+            };
+            let rating_text = text(format!("{:.2}", event.rating)).style(if event.rating > 4.7 {
+                text::success
+            } else if event.rating < 2.0 {
+                text::danger
+            } else {
+                text::default
+            });
+
+            let details_button = button(text("⋮")).on_press(TableMessage::ShowDetails(i));
+
+            rows = rows.push(
+                row![
+                    text(&event.name).width(300),
+                    time_text.width(80),
+                    price_text.width(80),
+                    rating_text.width(80),
+                    details_button
+                ]
+                .spacing(10)
+                .padding(5),
+            );
+        }
 
         let controls = {
             let labeled_slider = |label, range: std::ops::RangeInclusive<f32>, (x, y), on_change: fn(f32, f32) -> TableMessage| {
@@ -103,11 +114,31 @@ impl Table {
             .width(400)
         };
 
-        column![
-            center_y(scrollable(center_x(table)).spacing(10)).padding(10),
+        // Compose main column: table rows + controls
+        let mut main_col = column![
+            center_y(scrollable(center_x(rows)).spacing(10)).padding(10),
             center_x(controls).padding(10).style(container::dark)
         ]
-        .into()
+        .spacing(10);
+
+        // If a row is selected, show its details below
+        if let Some(idx) = self.selected {
+            if let Some(ev) = self.events.get(idx) {
+                let details = container(column![
+                    text(format!("Name: {}", ev.name)),
+                    text(format!("Duration: {} min", ev.duration.as_secs() / 60)),
+                    text(format!("Price: ${:.2}", ev.price)),
+                    text(format!("Rating: {:.2}", ev.rating)),
+                    row![button(text("Close")).on_press(TableMessage::HideDetails)]
+                ])
+                .padding(10)
+                .style(container::dark);
+
+                main_col = main_col.push(center_x(details).padding(10));
+            }
+        }
+
+        main_col.into()
     }
 }
 
@@ -117,6 +148,7 @@ impl Default for Table {
             events: Event::list(),
             padding: (10.0, 5.0),
             separator: (1.0, 1.0),
+            selected: None,
         }
     }
 }
