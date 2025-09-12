@@ -5,9 +5,9 @@ edition = "2024"
 
 [dependencies]
 iced = { version = "0.13.1", features = [] }
-tray-icon = { version = "0.21.1", features = ["gtk"] }
 # iced = {version = "0.14.0-dev", features = ["debug", "image", "advanced", "tokio"], git = "https://github.com/iced-rs/iced.git", rev = "ebe223c"}
-# image = { version = "0.25", features = ["png"] }
+image = { version = "0.25", features = ["png", "ico"] }
+tray-icon = { version = "0.21.1", default-features = false, features = ["libxdo"] }
 # tokio = {version = "*", features = ["full"]}
 # tracing-subscriber = "0.3"
 # iced = {version = "0.14.0-dev", features = ["debug"], git = "https://github.com/iced-rs/iced.git", rev = "ebe223c"}
