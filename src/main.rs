@@ -25,7 +25,7 @@ struct AppState {
 enum Message {
     WindowEvent(window::Event),
 
-    TrayIconEvent(tray_icon::menu::MenuId),
+    TrayIconEvent(tray_icon::menu::MenuEvent),
     ConfirmExit,
     CancelExit,
     TbMsg(data_table::TableMessage),
@@ -45,8 +45,8 @@ fn update(state: &mut AppState, message: Message) {
         Message::ConfirmExit => {
             std::process::exit(0);
         }
-        Message::TrayIconEvent(ref menu_id) => {
-            handle_tray_icon_event(menu_id);
+        Message::TrayIconEvent(ref event) => {
+            handle_tray_icon_event(event);
         }
         Message::TbMsg(msg) => state.main_table.update(msg),
         Message::CancelExit => {
@@ -81,19 +81,15 @@ const STR_QUIT: &str = "Quit";
 static TRAY_ICON_MENU_ITEM_IDS: LazyLock<Arc<Mutex<HashMap<&str, tray_icon::menu::MenuId>>>> =
     LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
 
-fn handle_tray_icon_event(event_id: &tray_icon::menu::MenuId) {
-    log::info!("Event ID: {event_id:?}");
-    let quit_id = TRAY_ICON_MENU_ITEM_IDS.lock().unwrap().get(&STR_QUIT).cloned();
-    let show_id = TRAY_ICON_MENU_ITEM_IDS.lock().unwrap().get(&STR_SHOW).cloned();
-    if let Some(show_id) = show_id
-        && event_id == &show_id
-    {
+fn handle_tray_icon_event(event: &tray_icon::menu::MenuEvent) {
+    log::info!("Event: {event:?}");
+    let quit_id = TRAY_ICON_MENU_ITEM_IDS.lock().ok().and_then(|guard| guard.get(&STR_QUIT).cloned());
+    let show_id = TRAY_ICON_MENU_ITEM_IDS.lock().ok().and_then(|guard| guard.get(&STR_SHOW).cloned());
+    if show_id.is_some() && show_id.unwrap() == event.id() {
         log::info!("Show clicked");
         // Here you would typically send a message to your application to show or hide the window
     }
-    if let Some(quit_id) = quit_id
-        && event_id == &quit_id
-    {
+    if quit_id.is_some() && quit_id.unwrap() == event.id() {
         log::info!("Quit clicked");
         std::process::exit(0);
     }
@@ -105,34 +101,58 @@ fn main() -> Result<(), BoxedError> {
     let (tx, rx) = std::sync::mpsc::channel();
 
     // Global static receiver
-    static TRAY_ICON_EVENT_RECEIVER: LazyLock<Mutex<Option<Receiver<tray_icon::menu::MenuId>>>> = LazyLock::new(|| Mutex::new(None));
+    static TRAY_ICON_EVENT_RECEIVER: LazyLock<Mutex<Option<Receiver<tray_icon::menu::MenuEvent>>>> = LazyLock::new(|| Mutex::new(None));
     *TRAY_ICON_EVENT_RECEIVER.lock().unwrap() = Some(rx);
 
-    // Create the tray menu
-    let menu = tray_icon::menu::Menu::new();
-    let show_item = tray_icon::menu::MenuItem::new(STR_SHOW, true, None);
-    let quit_item = tray_icon::menu::MenuItem::new(STR_QUIT, true, None);
-    menu.append(&show_item)?;
-    menu.append(&quit_item)?;
+    let tray_icon_closure = || -> Result<tray_icon::TrayIcon, BoxedError> {
+        // Create the tray menu
+        let menu = tray_icon::menu::Menu::new();
+        let show_item = tray_icon::menu::MenuItem::new(STR_SHOW, true, None);
+        let quit_item = tray_icon::menu::MenuItem::new(STR_QUIT, true, None);
+        menu.append(&show_item)?;
+        menu.append(&quit_item)?;
 
-    TRAY_ICON_MENU_ITEM_IDS.lock().unwrap().insert(STR_SHOW, show_item.id().clone());
-    TRAY_ICON_MENU_ITEM_IDS.lock().unwrap().insert(STR_QUIT, quit_item.id().clone());
+        TRAY_ICON_MENU_ITEM_IDS.lock().unwrap().insert(STR_SHOW, show_item.id().clone());
+        TRAY_ICON_MENU_ITEM_IDS.lock().unwrap().insert(STR_QUIT, quit_item.id().clone());
 
-    // Create the tray icon
-    let img = image::load_from_memory(common_assets::MAIN_ICON)?;
-    let rgba = img.to_rgba8();
-    let (width, height) = rgba.dimensions();
-    let icon = tray_icon::Icon::from_rgba(rgba.into_raw(), width, height)?;
-    let attrs = tray_icon::TrayIconAttributes {
-        icon: Some(icon),
-        menu: Some(Box::new(menu)),
-        tooltip: Some(APP_NAME.to_string()),
-        ..Default::default()
+        // Create the tray icon
+        let img = image::load_from_memory(common_assets::MAIN_ICON)?;
+        let rgba = img.to_rgba8();
+        let (width, height) = rgba.dimensions();
+        let icon = tray_icon::Icon::from_rgba(rgba.into_raw(), width, height)?;
+        let attrs = tray_icon::TrayIconAttributes {
+            icon: Some(icon),
+            menu: Some(Box::new(menu)),
+            tooltip: Some(APP_NAME.to_string()),
+            ..Default::default()
+        };
+        let tray_icon = tray_icon::TrayIcon::new(attrs)?;
+        Ok(tray_icon)
     };
-    let _tray_icon = tray_icon::TrayIcon::new(attrs)?;
+
+    #[cfg(not(target_os = "linux"))]
+    let _holder = tray_icon_closure().expect("Failed to create tray icon");
+
+    #[cfg(target_os = "linux")]
+    std::thread::spawn(move || {
+        gtk::init().expect("Failed to initialize GTK");
+        let _holder = tray_icon_closure().expect("Failed to create tray icon");
+
+        loop {
+            while let Ok(event) = tray_icon::menu::MenuEvent::receiver().try_recv() {
+                if let Err(e) = tx.send(event) {
+                    log::error!("Failed to send tray icon event: {e}");
+                }
+            }
+            log::info!("GTK main iteration");
+            gtk::main_iteration();
+        }
+    });
+
+    #[cfg(not(target_os = "linux"))]
     std::thread::spawn(move || {
         for event in tray_icon::menu::MenuEvent::receiver() {
-            if let Err(e) = tx.send(event.id().clone()) {
+            if let Err(e) = tx.send(event) {
                 log::error!("Failed to send tray icon event: {e}");
             }
         }
@@ -148,7 +168,7 @@ fn main() -> Result<(), BoxedError> {
                 window::events().map(|(_id, event)| Message::WindowEvent(event)),
                 iced::time::every(std::time::Duration::from_millis(100)).map(move |_| {
                     match TRAY_ICON_EVENT_RECEIVER.lock().unwrap().as_ref().unwrap().try_recv() {
-                        Ok(event_id) => Message::TrayIconEvent(event_id),
+                        Ok(event) => Message::TrayIconEvent(event),
                         Err(_) => Message::Noop,
                     }
                 }),
