@@ -11,7 +11,7 @@ iced_futures = { version = "0.14.0-dev", features = [], git = "https://github.co
 # iced_futures = "0.13.2"
 image = { version = "0.25", features = ["png", "ico"] }
 log = "0.4.28"
-tray-icon = { version = "0.21.1", default-features = false, features = ["libxdo"] }
+tray-icon = { version = "0.21.1", default-features = false, features = ["libxdo"], git = "https://github.com/ssrlive/tray-icon.git", rev = "6627546" }
 # tokio = {version = "*", features = ["full"]}
 # tracing-subscriber = "0.3"
 # gtk = {version = "*"}

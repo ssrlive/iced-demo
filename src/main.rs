@@ -32,7 +32,40 @@ enum Message {
     Noop,
 }
 
+fn tray_icon_closure() -> Result<tray_icon::TrayIcon, BoxedError> {
+    // Create the tray menu
+    let menu = tray_icon::menu::Menu::new();
+    let show_item = tray_icon::menu::MenuItem::new(STR_SHOW, true, None);
+    let quit_item = tray_icon::menu::MenuItem::new(STR_QUIT, true, None);
+    menu.append(&show_item)?;
+    menu.append(&quit_item)?;
+
+    TRAY_ICON_MENU_ITEM_IDS.lock().unwrap().insert(STR_SHOW, show_item.id().clone());
+    TRAY_ICON_MENU_ITEM_IDS.lock().unwrap().insert(STR_QUIT, quit_item.id().clone());
+
+    // Create the tray icon
+    let img = image::load_from_memory(common_assets::MAIN_ICON)?;
+    let rgba = img.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    let icon = tray_icon::Icon::from_rgba(rgba.into_raw(), width, height)?;
+    let attrs = tray_icon::TrayIconAttributes {
+        icon: Some(icon),
+        menu: Some(Box::new(menu)),
+        tooltip: Some(APP_NAME.to_string()),
+        ..Default::default()
+    };
+    let tray_icon = tray_icon::TrayIcon::new(attrs)?;
+    Ok(tray_icon)
+}
+
+static TRAY_ICON_HANDLE: std::sync::OnceLock<Arc<tray_icon::TrayIcon>> = std::sync::OnceLock::new();
+
 fn update(state: &mut AppState, message: Message) {
+    TRAY_ICON_HANDLE.get_or_init(|| {
+        let tray_icon = tray_icon_closure().expect("Failed to create tray icon");
+        Arc::new(tray_icon)
+    });
+
     match message {
         Message::WindowEvent(window::Event::CloseRequested) => {
             state.show_confirm = true;
@@ -103,35 +136,6 @@ fn main() -> Result<(), BoxedError> {
     // Global static receiver
     static TRAY_ICON_EVENT_RECEIVER: LazyLock<Mutex<Option<Receiver<tray_icon::menu::MenuEvent>>>> = LazyLock::new(|| Mutex::new(None));
     *TRAY_ICON_EVENT_RECEIVER.lock().unwrap() = Some(rx);
-
-    let tray_icon_closure = || -> Result<tray_icon::TrayIcon, BoxedError> {
-        // Create the tray menu
-        let menu = tray_icon::menu::Menu::new();
-        let show_item = tray_icon::menu::MenuItem::new(STR_SHOW, true, None);
-        let quit_item = tray_icon::menu::MenuItem::new(STR_QUIT, true, None);
-        menu.append(&show_item)?;
-        menu.append(&quit_item)?;
-
-        TRAY_ICON_MENU_ITEM_IDS.lock().unwrap().insert(STR_SHOW, show_item.id().clone());
-        TRAY_ICON_MENU_ITEM_IDS.lock().unwrap().insert(STR_QUIT, quit_item.id().clone());
-
-        // Create the tray icon
-        let img = image::load_from_memory(common_assets::MAIN_ICON)?;
-        let rgba = img.to_rgba8();
-        let (width, height) = rgba.dimensions();
-        let icon = tray_icon::Icon::from_rgba(rgba.into_raw(), width, height)?;
-        let attrs = tray_icon::TrayIconAttributes {
-            icon: Some(icon),
-            menu: Some(Box::new(menu)),
-            tooltip: Some(APP_NAME.to_string()),
-            ..Default::default()
-        };
-        let tray_icon = tray_icon::TrayIcon::new(attrs)?;
-        Ok(tray_icon)
-    };
-
-    #[cfg(not(target_os = "linux"))]
-    let _holder = tray_icon_closure().expect("Failed to create tray icon");
 
     #[cfg(target_os = "linux")]
     std::thread::spawn(move || {
